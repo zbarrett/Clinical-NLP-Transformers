@@ -10,8 +10,8 @@ from torch.utils.data import TensorDataset, DataLoader
 import torch.optim as optim
 
 from sklearn.model_selection import train_test_split
-from keras.datasets import imdb
-from keras.preprocessing import sequence
+from tensorflow.keras.datasets import imdb
+from tensorflow.keras.preprocessing import sequence
 
 max_features = 20000
 maxlen = 80  # cut texts after this number of words (among top max_features most common words)
