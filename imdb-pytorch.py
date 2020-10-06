@@ -2,6 +2,7 @@ import numpy as np
 # import matplotlib.pyplot as plt
 # import pandas as pd
 # import seaborn as sns
+import pickle
 
 import torch
 import torch.nn as nn
@@ -17,6 +18,7 @@ max_features = 20000
 maxlen = 80  # cut texts after this number of words (among top max_features most common words)
 batch_size = 32
 
+"""
 
 # PREPROCESSING
 
@@ -45,9 +47,19 @@ train_loader = DataLoader(train_data, shuffle=True, batch_size=batch_size, drop_
 val_loader = DataLoader(val_data, shuffle=True, batch_size=batch_size, drop_last=True)
 test_loader = DataLoader(test_data, shuffle=True, batch_size=batch_size, drop_last=True)
 
+# pickling
+pickle_out = open('imdb_tensors.pkl', 'wb')
+pickle.dump([train_loader, val_loader, test_loader], pickle_out)
+pickle_out.close()
 
+
+"""
 
 # MODELLING
+
+
+pickle_in = open('imdb_tensors.pkl', 'rb')
+train_loader, val_loader, test_loader = pickle.load(pickle_in)
 
 
 # defining model
