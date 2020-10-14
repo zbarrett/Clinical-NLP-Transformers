@@ -135,7 +135,7 @@ else:
 
 
 # hyperparams = [{'lstm_dropout': .2, 'dropout': .2, 'hidden_dim': 512}]
-hyperparams = randomSearch(1)
+hyperparams = randomSearch(20)
 
 hyperparam_results = []
 for params in hyperparams:
@@ -150,7 +150,7 @@ for params in hyperparams:
 
     epochs = 200
     counter = 0
-    print_every = 10
+    print_every = 1000
     clip = 5
     valid_loss_min = np.Inf
     erstop_patience = 10
@@ -250,4 +250,4 @@ for params in hyperparams:
     # Test accuracy: 79.904%
 
 
-
+print(hyperparam_results)
