@@ -4,6 +4,7 @@ import numpy as np
 # import seaborn as sns
 import pickle
 import random
+import dill
 
 import torch
 import torch.nn as nn
@@ -11,13 +12,76 @@ import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
 import torch.optim as optim
 
+from torchtext import data
+from torchtext import datasets
+
 from sklearn.model_selection import train_test_split
 from tensorflow.keras.datasets import imdb
 from tensorflow.keras.preprocessing import sequence
 
+
+
 max_features = 20000
 maxlen = 80  # cut texts after this number of words (among top max_features most common words)
 batch_size = 32
+
+SEED = 407  # used to set random seed
+
+
+
+# determining device to use
+# torch.cuda.is_available() checks and returns a Boolean True if a GPU is available, else it'll return False
+is_cuda = torch.cuda.is_available()
+
+# If we have a GPU available, we'll set our device to GPU. We'll use this device variable later in our code.
+if is_cuda:
+    device = torch.device("cuda")
+else:
+    device = torch.device("cpu")
+
+
+# HELPER FUNCTIONS FOR PREPROCESSING
+# method to help with pickling
+def pickleDataset(dataset_list, path):
+    # dataset_list is list of datasets
+    # each item will have a field for text & field for label
+    # can recreate dataset by pickling fields & examples
+
+    all_dataset_components = []
+    for dataset in dataset_list:
+        text_field = dataset.fields['text']
+        label_field = dataset.fields['label']
+        dataset_examples = dataset.examples
+
+        # creating list to store objects
+        dataset_components = [text_field, label_field, dataset_examples]
+        all_dataset_components.append(dataset_components)
+
+    # pickling list
+    with open(path, "wb") as f:
+        dill.dump(all_dataset_components, f)
+
+    return
+
+
+# method to unpickle and create dataset
+def unpickleDataset(path):
+    # reference pickleDataset method
+
+    # loading pickled dataset components
+    with open(path, "rb")as f:
+        all_dataset_components = dill.load(f)
+
+    # looping through the multiple datasets
+    dataset_list = []
+    for dataset_components in all_dataset_components:
+        # creating dataset object
+        dataset = data.dataset.Dataset(examples=dataset_components[2],
+                                       fields={'text': dataset_components[0], 'label': dataset_components[1]})
+        dataset_list.append(dataset)
+
+    return dataset_list
+
 
 """
 
@@ -56,14 +120,52 @@ pickle_out.close()
 
 """
 
+"""
+# SECOND METHOD OF PREPROCESSING (WORD EMBEDDINGS)
+
+# reference https://medium.com/@adam.wearne/lets-get-sentimental-with-pytorch-dcdd9e1ea4c9 for tutorial
+TEXT = data.Field(lower=True, include_lengths=True)   # tokenize='spacy'??
+LABEL = data.LabelField(dtype=torch.float)  # storing labels as float
+
+train_data, test_data = datasets.IMDB.splits(TEXT, LABEL)
+train_data, val_data = train_data.split(random_state=random.seed(SEED))
+
+TEXT.build_vocab(train_data,
+                 max_size=max_features,
+                 vectors='glove.6B.300d',
+                 unk_init=torch.Tensor.normal_)
+
+LABEL.build_vocab(train_data)
+
+
+
+
+
+# pickling using methods
+pickleDataset([train_data, val_data, test_data], 'imdb_torchtext_datasets.pkl')
+
+"""
+
 # MODELLING
 
 
-pickle_in = open('imdb_tensors.pkl', 'rb')
-train_loader, val_loader, test_loader = pickle.load(pickle_in)
+# below is for bag of words version
+# pickle_in = open('imdb_tensors.pkl', 'rb')
+# train_loader, val_loader, test_loader = pickle.load(pickle_in)
 
-# could pass dropout prob to nn.lstm
-# could add dropout layers
+
+# below is for word embeddings version
+train_data, val_data, test_data = unpickleDataset('imdb_torchtext_datasets.pkl')
+
+# creating iterators
+train_iterator, val_iterator, test_iterator = data.BucketIterator.splits(
+    (train_data, val_data, test_data),
+    batch_size=batch_size,
+    sort_within_batch=True,
+    device=device)
+
+train_loader = train_iterator
+val_loader = val_iterator
 
 
 # defining model
@@ -123,19 +225,11 @@ def randomSearch(num_combos):
     return params
 
 
-# determining device to use
-# torch.cuda.is_available() checks and returns a Boolean True if a GPU is available, else it'll return False
-is_cuda = torch.cuda.is_available()
-
-# If we have a GPU available, we'll set our device to GPU. We'll use this device variable later in our code.
-if is_cuda:
-    device = torch.device("cuda")
-else:
-    device = torch.device("cpu")
 
 
-# hyperparams = [{'lstm_dropout': .2, 'dropout': .2, 'hidden_dim': 512}]
-hyperparams = randomSearch(20)
+
+hyperparams = [{'lstm_dropout': .2, 'dropout': .2, 'hidden_dim': 512}]
+# hyperparams = randomSearch(20)
 
 hyperparam_results = []
 for params in hyperparams:
@@ -157,6 +251,7 @@ for params in hyperparams:
 
     val_loss_across_epochs = []
 
+
     model.train()
     for i in range(epochs):
         h = model.init_hidden(batch_size)
@@ -175,6 +270,7 @@ for params in hyperparams:
                 val_h = model.init_hidden(batch_size)
                 val_losses = []
                 model.eval()
+                """
                 for inp, lab in val_loader:
                     val_h = tuple([each.data for each in val_h])
                     inp, lab = inp.to(device), lab.to(device)
@@ -183,13 +279,19 @@ for params in hyperparams:
                     val_losses.append(val_loss.item())
 
                 val_loss_mean = np.mean(val_losses)
+                """
 
                 model.train()
                 print("Epoch: {}/{}...".format(i+1, epochs),
                       "Step: {}...".format(counter),
-                      "Loss: {:.6f}...".format(loss.item()),
-                      "Val Loss: {:.6f}".format(val_loss_mean))
+                      "Loss: {:.6f}...".format(loss.item()))
 
+                # print("Epoch: {}/{}...".format(i + 1, epochs),
+                #       "Step: {}...".format(counter),
+                #       "Loss: {:.6f}...".format(loss.item()),
+                #       "Val Loss: {:.6f}".format(val_loss_mean))
+
+        """
         # THIS HAPPENS AT END OF EPOCH -- earlystopping like in keras
         val_h = model.init_hidden(batch_size)
         val_losses = []
@@ -211,6 +313,7 @@ for params in hyperparams:
         if min(recent_epochs) == recent_epochs[0]:
             # if the minimum
             break
+        """
 
 
     # if np.mean(val_losses) <= valid_loss_min:
@@ -221,7 +324,7 @@ for params in hyperparams:
 
 
 
-
+    """
     test_losses = []
     num_correct = 0
     h = model.init_hidden(batch_size)
@@ -245,9 +348,14 @@ for params in hyperparams:
     # adding results of random search to list
     hyperparam_results.append([test_acc, np.mean(test_losses), params])
 
+    """
+
 
     # Test loss: 0.433
     # Test accuracy: 79.904%
 
 
-print(hyperparam_results)
+# print(hyperparam_results)
+
+
+
