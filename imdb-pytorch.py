@@ -225,7 +225,7 @@ def accuracy(scores, y):
     acc = int(correct.sum()) / len(correct)
     return acc
 
-temp = [0,0]
+
 def train(model, iterator, optimizer, criterion):
     epoch_loss = 0
     epoch_acc = 0
@@ -234,22 +234,17 @@ def train(model, iterator, optimizer, criterion):
     model.train()
     for batch in iterator:
         optimizer.zero_grad()
-        print(1)
+
         text, text_lengths = batch.text
-        print(2)
+
         predictions = model(text, text_lengths).squeeze(1)
-        print(3)
-        temp[0] = predictions
-        temp[1] = batch
+
         loss = criterion(predictions, batch.label)
-        print(4)
+
         acc = accuracy(predictions, batch.label)
-        print(5)
 
         loss.backward()
-        print(6)
         optimizer.step()
-        print(7)
 
         epoch_loss += loss.item()
         epoch_acc += acc
