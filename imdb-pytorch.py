@@ -230,7 +230,6 @@ def train(model, iterator, optimizer, criterion):
     epoch_loss = 0
     epoch_acc = 0
 
-    print(0)
     model.train()
     for batch in iterator:
         optimizer.zero_grad()
@@ -269,7 +268,7 @@ def evaluate(model, iterator, criterion):
 
             acc = accuracy(predictions, batch.label)
             epoch_loss += loss.item()
-            epoch_acc += acc.item()
+            epoch_acc += acc
 
     return epoch_loss / len(iterator), epoch_acc / len(iterator)
 
