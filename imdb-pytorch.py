@@ -15,15 +15,11 @@ import torch.optim as optim
 from torchtext import data
 from torchtext import datasets
 
-from sklearn.model_selection import train_test_split
-from tensorflow.keras.datasets import imdb
-from tensorflow.keras.preprocessing import sequence
-
-
-
-max_features = 20000
-maxlen = 80  # cut texts after this number of words (among top max_features most common words)
+# constants
 batch_size = 32
+
+# pickling path
+path_string = 'imdb_torchtext_datasets'
 
 SEED = 407  # used to set random seed
 
@@ -40,12 +36,13 @@ else:
     device = torch.device("cpu")
 
 
-# HELPER FUNCTIONS FOR PREPROCESSING
+# HELPER FUNCTIONS FOR PREPROCESSING -- torchtext doesn't like pickle :/
 # method to help with pickling
-def pickleDataset(dataset_list, path):
+def pickleDataset(dataset_list, corpus_fields, path):
     # dataset_list is list of datasets
     # each item will have a field for text & field for label
     # can recreate dataset by pickling fields & examples
+    # corpus fields are TEXT & LABEL
 
     all_dataset_components = []
     for dataset in dataset_list:
@@ -57,9 +54,14 @@ def pickleDataset(dataset_list, path):
         dataset_components = [text_field, label_field, dataset_examples]
         all_dataset_components.append(dataset_components)
 
-    # pickling list
-    with open(path, "wb") as f:
+
+    # pickling dataset components
+    with open(path+'.pkl', "wb") as f:
         dill.dump(all_dataset_components, f)
+
+    # pickling dataset components
+    with open(path+'_corpus.pkl', "wb") as f:
+        dill.dump(corpus_fields, f)
 
     return
 
@@ -69,7 +71,7 @@ def unpickleDataset(path):
     # reference pickleDataset method
 
     # loading pickled dataset components
-    with open(path, "rb")as f:
+    with open(path+'.pkl', "rb")as f:
         all_dataset_components = dill.load(f)
 
     # looping through the multiple datasets
@@ -80,45 +82,12 @@ def unpickleDataset(path):
                                        fields={'text': dataset_components[0], 'label': dataset_components[1]})
         dataset_list.append(dataset)
 
-    return dataset_list
+    # loading corpus components
+    with open(path+'_corpus.pkl', "rb")as f:
+        corpus_fields = dill.load(f)
 
+    return dataset_list, corpus_fields
 
-"""
-
-# PREPROCESSING
-
-print('Loading data...')
-(X_train, y_train), (X_test, y_test) = imdb.load_data(num_words=max_features)
-
-# splitting test into test and val
-X_val, X_test, y_val, y_test = train_test_split(X_test, y_test, test_size=0.5)
-
-# padding to ensure appropriate dims
-X_train = sequence.pad_sequences(X_train, maxlen=maxlen)
-X_val = sequence.pad_sequences(X_val, maxlen=maxlen)
-X_test = sequence.pad_sequences(X_test, maxlen=maxlen)
-
-print('X_train shape:', X_train.shape)
-print('X_val shape:', X_val.shape)
-print('X_test shape:', X_test.shape)
-
-# converting np arrays to tensors
-train_data = TensorDataset(torch.from_numpy(X_train), torch.from_numpy(y_train))
-val_data = TensorDataset(torch.from_numpy(X_val), torch.from_numpy(y_val))
-test_data = TensorDataset(torch.from_numpy(X_test), torch.from_numpy(y_test))
-
-# creating data loader
-train_loader = DataLoader(train_data, shuffle=True, batch_size=batch_size, drop_last=True)
-val_loader = DataLoader(val_data, shuffle=True, batch_size=batch_size, drop_last=True)
-test_loader = DataLoader(test_data, shuffle=True, batch_size=batch_size, drop_last=True)
-
-# pickling
-pickle_out = open('imdb_tensors.pkl', 'wb')
-pickle.dump([train_loader, val_loader, test_loader], pickle_out)
-pickle_out.close()
-
-
-"""
 
 """
 # SECOND METHOD OF PREPROCESSING (WORD EMBEDDINGS)
@@ -142,71 +111,63 @@ LABEL.build_vocab(train_data)
 
 
 # pickling using methods
-pickleDataset([train_data, val_data, test_data], 'imdb_torchtext_datasets.pkl')
+pickleDataset([train_data, val_data, test_data], [TEXT, LABEL], path_string)
 
 """
 
 # MODELLING
 
-
-# below is for bag of words version
-# pickle_in = open('imdb_tensors.pkl', 'rb')
-# train_loader, val_loader, test_loader = pickle.load(pickle_in)
-
-
-# below is for word embeddings version
-train_data, val_data, test_data = unpickleDataset('imdb_torchtext_datasets.pkl')
+(train_data, val_data, test_data), (TEXT, LABEL) = unpickleDataset(path_string)
 
 # creating iterators
+# train_iterator, val_iterator, test_iterator = data.BucketIterator.splits(
+#     (train_data, val_data, test_data),
+#     batch_size=batch_size,
+#     sort_within_batch=True,
+#     device=device)
+
 train_iterator, val_iterator, test_iterator = data.BucketIterator.splits(
     (train_data, val_data, test_data),
     batch_size=batch_size,
+    sort_key=lambda x: len(x.text),
     sort_within_batch=True,
     device=device)
 
-train_loader = train_iterator
-val_loader = val_iterator
-
-
+# taken from tutorial
 # defining model
-class Net(nn.Module):
-    def __init__(self, vocab_size, embedding_dim, hidden_dim, lstm_dropout_prob, dropout_prob, n_layers=1):
-        super(Net, self).__init__()
+class AdamNetV2(nn.Module):
+    def __init__(self, vocab_size, embedding_dim, hidden_dim, n_layers,
+                 is_bidirectional=True, dropout=0.0, output_dim=1, padding_idx=None):
+        super().__init__()
 
-        self.vocab_size = vocab_size
-        self.hidden_dim = hidden_dim
-        self.embedding_dim = embedding_dim
-        self.n_layers = n_layers
+        self.embedding = nn.Embedding(vocab_size, embedding_dim,
+                                      padding_idx=padding_idx)
 
-        self.embedding = nn.Embedding(vocab_size, embedding_dim)
-        self.lstm = nn.LSTM(embedding_dim, hidden_dim, dropout=lstm_dropout_prob, batch_first=True)
-        self.dropout = nn.Dropout(dropout_prob)
-        self.fc1 = nn.Linear(hidden_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, 1)
-        self.sigmoid = nn.Sigmoid()
+        self.lstm = nn.LSTM(embedding_dim, hidden_dim, num_layers=n_layers,
+                            bidirectional=is_bidirectional, dropout=dropout)
 
-    def forward(self, x, hidden):
-        batch_size = x.size(0)
-        x = x.long()  # idk if this line is needed
-        embeds = self.embedding(x)    # ???
-        lstm_out, hidden = self.lstm(embeds, hidden)
-        lstm_out = lstm_out.contiguous().view(-1, self.hidden_dim)
+        self.fc = nn.Linear((is_bidirectional + 1) * hidden_dim, output_dim)
 
-        out = self.fc1(lstm_out)
-        out = self.dropout(out)
-        out = self.fc2(out)
-        out = self.sigmoid(out)
+        self.is_bidirectional = is_bidirectional
 
-        out = out.view(batch_size, -1)
-        out = out[:, -1]
+    def forward(self, input_sequence, sequence_length):
 
-        return out, hidden
+        embeddings = self.embedding(input_sequence)
 
-    def init_hidden(self, batch_size):
-        weight = next(self.parameters()).data
-        hidden = (weight.new(self.n_layers, batch_size, self.hidden_dim).zero_().to(device),
-                  weight.new(self.n_layers, batch_size, self.hidden_dim).zero_().to(device))
-        return hidden
+        packed_embeddings = nn.utils.rnn.pack_padded_sequence(embeddings, sequence_length)
+
+        packed_output, (hidden_state, cell_state) = self.lstm(packed_embeddings)
+
+        if self.is_bidirectional:
+            output = torch.cat((hidden_state[-2, :, :], hidden_state[-1, :, :]), dim=1)
+        else:
+            output = hidden_state[-1, :, :]
+
+
+        scores = self.fc(output)
+
+        return scores
+
 
 
 
@@ -229,133 +190,236 @@ def randomSearch(num_combos):
 
 
 hyperparams = [{'lstm_dropout': .2, 'dropout': .2, 'hidden_dim': 512}]
-# hyperparams = randomSearch(20)
+hyperparams = randomSearch(20)
 
-hyperparam_results = []
-for params in hyperparams:
-    model = Net(vocab_size=max_features, embedding_dim=maxlen, hidden_dim=params['hidden_dim'], lstm_dropout_prob=params['lstm_dropout'], dropout_prob=params['dropout'])
-    model.to(device)
-    print(model)
-
-    # creating loss & optimizer
-    criterion = nn.BCELoss()
-    optimizer = torch.optim.Adam(model.parameters())
+vocab_size = len(TEXT.vocab)
+embedding_dim = 300  # This needs to match the size of the pre-trained embeddings!
+hidden_dim = 256
+num_layers = 3
+dropout = 0.5
+pad_idx = TEXT.vocab.stoi[TEXT.pad_token]
 
 
-    epochs = 200
-    counter = 0
-    print_every = 1000
-    clip = 5
-    valid_loss_min = np.Inf
-    erstop_patience = 10
+model = AdamNetV2(vocab_size=vocab_size, embedding_dim=embedding_dim, hidden_dim=hidden_dim,
+                  n_layers=num_layers,  dropout=dropout, padding_idx=pad_idx)
 
-    val_loss_across_epochs = []
+# Initialize word embeddings
+glove_vectors = TEXT.vocab.vectors
+model.embedding.weight.data.copy_(glove_vectors)
+
+# Zero out <unk> and <pad> tokens
+unk_idx = TEXT.vocab.stoi[TEXT.unk_token]
+model.embedding.weight.data[unk_idx] = torch.zeros(embedding_dim)
+model.embedding.weight.data[pad_idx] = torch.zeros(embedding_dim)
+
+# Define our loss function, optimizer, and move things to GPU
+criterion = nn.BCEWithLogitsLoss()
+model = model.to(device)
+criterion = criterion.to(device)
+optimizer = optim.Adam(model.parameters())
 
 
+def accuracy(scores, y):
+    scores = torch.round(torch.sigmoid(scores))
+    correct = (scores == y)
+    acc = int(correct.sum()) / len(correct)
+    return acc
+
+temp = [0,0]
+def train(model, iterator, optimizer, criterion):
+    epoch_loss = 0
+    epoch_acc = 0
+
+    print(0)
     model.train()
-    for i in range(epochs):
-        h = model.init_hidden(batch_size)
-        for inputs, labels in train_loader:
-            counter += 1
-            h = tuple([e.data for e in h])
-            inputs, labels = inputs.to(device), labels.to(device)
-            model.zero_grad()
-            output, h = model(inputs, h)
-            loss = criterion(output.squeeze(), labels.float())
-            loss.backward()
-            nn.utils.clip_grad_norm_(model.parameters(), clip)
-            optimizer.step()
+    for batch in iterator:
+        optimizer.zero_grad()
+        print(1)
+        text, text_lengths = batch.text
+        print(2)
+        predictions = model(text, text_lengths).squeeze(1)
+        print(3)
+        temp[0] = predictions
+        temp[1] = batch
+        loss = criterion(predictions, batch.label)
+        print(4)
+        acc = accuracy(predictions, batch.label)
+        print(5)
 
-            if counter % print_every == 0:
-                val_h = model.init_hidden(batch_size)
-                val_losses = []
-                model.eval()
-                """
-                for inp, lab in val_loader:
-                    val_h = tuple([each.data for each in val_h])
-                    inp, lab = inp.to(device), lab.to(device)
-                    out, val_h = model(inp, val_h)
-                    val_loss = criterion(out.squeeze(), lab.float())
-                    val_losses.append(val_loss.item())
+        loss.backward()
+        print(6)
+        optimizer.step()
+        print(7)
 
-                val_loss_mean = np.mean(val_losses)
-                """
-
-                model.train()
-                print("Epoch: {}/{}...".format(i+1, epochs),
-                      "Step: {}...".format(counter),
-                      "Loss: {:.6f}...".format(loss.item()))
-
-                # print("Epoch: {}/{}...".format(i + 1, epochs),
-                #       "Step: {}...".format(counter),
-                #       "Loss: {:.6f}...".format(loss.item()),
-                #       "Val Loss: {:.6f}".format(val_loss_mean))
-
-        """
-        # THIS HAPPENS AT END OF EPOCH -- earlystopping like in keras
-        val_h = model.init_hidden(batch_size)
-        val_losses = []
-        model.eval()
-        for inp, lab in val_loader:
-            val_h = tuple([each.data for each in val_h])
-            inp, lab = inp.to(device), lab.to(device)
-            out, val_h = model(inp, val_h)
-            val_loss = criterion(out.squeeze(), lab.float())
-            val_losses.append(val_loss.item())
-
-        val_loss_mean = np.mean(val_losses)
-        val_loss_across_epochs.append(val_loss_mean)
-        model.train()
-
-        # checking to see if earlystopping criteria is met
-        recent_epochs = val_loss_across_epochs[len(val_loss_across_epochs)-1-erstop_patience:] # patience is number of epochs to wait before stopping
-
-        if min(recent_epochs) == recent_epochs[0]:
-            # if the minimum
-            break
-        """
+        epoch_loss += loss.item()
+        epoch_acc += acc
 
 
-    # if np.mean(val_losses) <= valid_loss_min:
-    #     torch.save(model.state_dict(), './state_dict.pt')
-    #     print('Validation loss decreased ({:.6f} --> {:.6f}).  Saving model ...'.format(valid_loss_min,
-    #                                                                                     np.mean(val_losses)))
-    #     valid_loss_min = np.mean(val_losses)
+    return epoch_loss / len(iterator), epoch_acc / len(iterator)
 
 
-
-    """
-    test_losses = []
-    num_correct = 0
-    h = model.init_hidden(batch_size)
+def evaluate(model, iterator, criterion):
+    epoch_loss = 0
+    epoch_acc = 0
 
     model.eval()
-    for inputs, labels in test_loader:
-        h = tuple([each.data for each in h])
-        inputs, labels = inputs.to(device), labels.to(device)
-        output, h = model(inputs, h)
-        test_loss = criterion(output.squeeze(), labels.float())
-        test_losses.append(test_loss.item())
-        pred = torch.round(output.squeeze())  # Rounds the output to 0/1
-        correct_tensor = pred.eq(labels.float().view_as(pred))
-        correct = np.squeeze(correct_tensor.cpu().numpy())
-        num_correct += np.sum(correct)
 
-    print("Test loss: {:.3f}".format(np.mean(test_losses)))
-    test_acc = num_correct/len(test_loader.dataset)
-    print("Test accuracy: {:.3f}%".format(test_acc*100))
+    with torch.no_grad():
+        for batch in iterator:
+            text, text_lengths = batch.text
 
-    # adding results of random search to list
-    hyperparam_results.append([test_acc, np.mean(test_losses), params])
+            predictions = model(text, text_lengths).squeeze(1)
 
-    """
+            loss = criterion(predictions, batch.label)
 
+            acc = accuracy(predictions, batch.label)
+            epoch_loss += loss.item()
+            epoch_acc += acc.item()
 
-    # Test loss: 0.433
-    # Test accuracy: 79.904%
-
-
-# print(hyperparam_results)
+    return epoch_loss / len(iterator), epoch_acc / len(iterator)
 
 
 
+num_epochs = 10
+best_valid_loss = 1000000
+
+for epoch in range(num_epochs):
+    train_loss, train_acc = train(model, train_iterator, optimizer, criterion)
+    valid_loss, valid_acc = evaluate(model, val_iterator, criterion)
+
+    # Print test performance
+    test_loss, test_acc = evaluate(model, test_iterator, criterion)
+
+    print(f'Test Loss: {test_loss:.3f}\nTest Acc: {test_acc*100:.2f}%')
+
+
+
+
+# hyperparam_results = []
+# for params in hyperparams:
+#     model = Net(vocab_size=max_features, embedding_dim=embedding_dim, hidden_dim=params['hidden_dim'], lstm_dropout_prob=params['lstm_dropout'], dropout_prob=params['dropout'])
+#     model.to(device)
+#     print(model)
+#
+#     # creating loss & optimizer
+#     criterion = nn.BCELoss()
+#     optimizer = torch.optim.Adam(model.parameters())
+#
+#
+#     epochs = 200
+#     counter = 0
+#     print_every = 1000
+#     clip = 5
+#     valid_loss_min = np.Inf
+#     erstop_patience = 10
+#
+#     val_loss_across_epochs = []
+#
+#
+#     model.train()
+#     for i in range(epochs):
+#         h = model.init_hidden(batch_size)
+#         for inputs, labels in train_loader:
+#             counter += 1
+#             h = tuple([e.data for e in h])
+#             inputs, labels = inputs.to(device), labels.to(device)
+#             model.zero_grad()
+#             output, h = model(inputs, h)
+#             loss = criterion(output.squeeze(), labels.float())
+#             loss.backward()
+#             nn.utils.clip_grad_norm_(model.parameters(), clip)
+#             optimizer.step()
+#
+#             if counter % print_every == 0:
+#                 val_h = model.init_hidden(batch_size)
+#                 val_losses = []
+#                 model.eval()
+#                 """
+#                 for inp, lab in val_loader:
+#                     val_h = tuple([each.data for each in val_h])
+#                     inp, lab = inp.to(device), lab.to(device)
+#                     out, val_h = model(inp, val_h)
+#                     val_loss = criterion(out.squeeze(), lab.float())
+#                     val_losses.append(val_loss.item())
+#
+#                 val_loss_mean = np.mean(val_losses)
+#                 """
+#
+#                 model.train()
+#                 print("Epoch: {}/{}...".format(i+1, epochs),
+#                       "Step: {}...".format(counter),
+#                       "Loss: {:.6f}...".format(loss.item()))
+#
+#                 # print("Epoch: {}/{}...".format(i + 1, epochs),
+#                 #       "Step: {}...".format(counter),
+#                 #       "Loss: {:.6f}...".format(loss.item()),
+#                 #       "Val Loss: {:.6f}".format(val_loss_mean))
+#
+#         """
+#         # THIS HAPPENS AT END OF EPOCH -- earlystopping like in keras
+#         val_h = model.init_hidden(batch_size)
+#         val_losses = []
+#         model.eval()
+#         for inp, lab in val_loader:
+#             val_h = tuple([each.data for each in val_h])
+#             inp, lab = inp.to(device), lab.to(device)
+#             out, val_h = model(inp, val_h)
+#             val_loss = criterion(out.squeeze(), lab.float())
+#             val_losses.append(val_loss.item())
+#
+#         val_loss_mean = np.mean(val_losses)
+#         val_loss_across_epochs.append(val_loss_mean)
+#         model.train()
+#
+#         # checking to see if earlystopping criteria is met
+#         recent_epochs = val_loss_across_epochs[len(val_loss_across_epochs)-1-erstop_patience:] # patience is number of epochs to wait before stopping
+#
+#         if min(recent_epochs) == recent_epochs[0]:
+#             # if the minimum
+#             break
+#         """
+#
+#
+#     # if np.mean(val_losses) <= valid_loss_min:
+#     #     torch.save(model.state_dict(), './state_dict.pt')
+#     #     print('Validation loss decreased ({:.6f} --> {:.6f}).  Saving model ...'.format(valid_loss_min,
+#     #                                                                                     np.mean(val_losses)))
+#     #     valid_loss_min = np.mean(val_losses)
+#
+#
+#
+#     """
+#     test_losses = []
+#     num_correct = 0
+#     h = model.init_hidden(batch_size)
+#
+#     model.eval()
+#     for inputs, labels in test_loader:
+#         h = tuple([each.data for each in h])
+#         inputs, labels = inputs.to(device), labels.to(device)
+#         output, h = model(inputs, h)
+#         test_loss = criterion(output.squeeze(), labels.float())
+#         test_losses.append(test_loss.item())
+#         pred = torch.round(output.squeeze())  # Rounds the output to 0/1
+#         correct_tensor = pred.eq(labels.float().view_as(pred))
+#         correct = np.squeeze(correct_tensor.cpu().numpy())
+#         num_correct += np.sum(correct)
+#
+#     print("Test loss: {:.3f}".format(np.mean(test_losses)))
+#     test_acc = num_correct/len(test_loader.dataset)
+#     print("Test accuracy: {:.3f}%".format(test_acc*100))
+#
+#     # adding results of random search to list
+#     hyperparam_results.append([test_acc, np.mean(test_losses), params])
+#
+#     """
+#
+#
+#     # Test loss: 0.433
+#     # Test accuracy: 79.904%
+#
+#
+# # print(hyperparam_results)
+#
+#
+#
