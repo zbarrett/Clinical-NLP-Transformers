@@ -226,7 +226,7 @@ class Transformer(nn.Module):
         b, t, k = tokens.size()
 
         # generate position embeddings
-        positions = torch.arange(t)
+        positions = torch.arange(t, device=device)
 
         positions = self.pos_emb(positions)[None, :, :].expand(b, t, k)
 
@@ -245,7 +245,7 @@ def accuracy(scores, y):
     acc = int(correct.sum()) / len(correct)
     return acc
 
-
+temp = []
 def train(model, iterator, optimizer, criterion):
     epoch_loss = 0
     epoch_acc = 0
@@ -255,6 +255,7 @@ def train(model, iterator, optimizer, criterion):
         optimizer.zero_grad()
 
         text, text_lengths = batch.text
+        temp.append(batch)
 
         predictions = model(text).squeeze(1)
 
@@ -306,7 +307,7 @@ pad_idx = TEXT.vocab.stoi[TEXT.pad_token]
 seq_len = 956
 
 
-model = Transformer(k=embedding_dim, seq_length=seq_len, heads=1, depth=6, num_tokens=vocab_size, num_classes=2)
+model = Transformer(k=embedding_dim, seq_length=seq_len, heads=1, depth=6, num_tokens=vocab_size, num_classes=1)
 
     # vocab_size=vocab_size, embedding_dim=embedding_dim, hidden_dim=hidden_dim,
     #               n_layers=num_layers,  dropout=dropout, padding_idx=pad_idx)
