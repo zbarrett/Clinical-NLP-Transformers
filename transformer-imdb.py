@@ -249,7 +249,6 @@ def accuracy(scores, y):
 def train(model, iterator, optimizer, criterion):
     epoch_loss = 0
     epoch_acc = 0
-    print(10)
 
     model.train()
     for batch in iterator:
@@ -333,8 +332,9 @@ optimizer = optim.Adam(model.parameters())
 num_epochs = 10
 best_valid_loss = 1000000
 
-
+print('Entered training loop')
 for epoch in range(num_epochs):
+    print(epoch)
     train_loss, train_acc = train(model, train_iterator, optimizer, criterion)
     print(train_loss)
     print(train_acc)
