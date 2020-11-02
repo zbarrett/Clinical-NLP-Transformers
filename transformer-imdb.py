@@ -257,7 +257,11 @@ def train(model, iterator, optimizer, criterion):
         text, text_lengths = batch.text
         temp.append(batch)
 
+        # transposing to get correct dims
+        text = torch.transpose(text, 0, 1)
+
         predictions = model(text).squeeze(1)
+        temp.append(predictions)
 
         loss = criterion(predictions, batch.label)
         acc = accuracy(predictions, batch.label)
